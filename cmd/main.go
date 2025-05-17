@@ -307,6 +307,23 @@ func main() {
 		return c.JSON(http.StatusOK, authors)
 	})
 
+	e.GET("/api/books/:id", func(c echo.Context) error {
+		id := c.Param("id")
+
+		// Query MongoDB for a book with the matching ID
+		var book BookStore
+		err := coll.FindOne(context.TODO(), bson.M{"id": id}).Decode(&book)
+
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				return c.JSON(http.StatusNotFound, map[string]string{"error": "Book not found"})
+			}
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve book"})
+		}
+
+		return c.JSON(http.StatusOK, book)
+	})
+
 	e.GET("/api/years", func(c echo.Context) error {
 		years := findAllYears(coll)
 		return c.JSON(http.StatusOK, years)
