@@ -23,12 +23,12 @@ import (
 // More on these "tags" like `bson:"_id,omitempty"`: https://go.dev/wiki/Well-known-struct-tags
 type BookStore struct {
 	MongoID     primitive.ObjectID `bson:"_id,omitempty"`
-	ID          string
-	BookName    string
-	BookAuthor  string
-	BookEdition string
-	BookPages   string
-	BookYear    string
+	ID          string             `json:"id"`
+	BookName    string             `json:"title"`
+	BookAuthor  string             `json:"author"`
+	BookEdition string             `json:"edition,omitempty"`
+	BookPages   string             `json:"pages,omitempty"`
+	BookYear    string             `json:"year,omitempty"`
 }
 
 // Wraps the "Template" struct to associate a necessary method
@@ -164,6 +164,7 @@ func findAllBooks(coll *mongo.Collection) []map[string]interface{} {
 	}
 
 	var ret []map[string]interface{}
+
 	for _, res := range results {
 		ret = append(ret, map[string]interface{}{
 			"ID":          res.MongoID.Hex(),
@@ -171,6 +172,40 @@ func findAllBooks(coll *mongo.Collection) []map[string]interface{} {
 			"BookAuthor":  res.BookAuthor,
 			"BookEdition": res.BookEdition,
 			"BookPages":   res.BookPages,
+		})
+	}
+
+	return ret
+}
+
+func findAllAuthors(coll *mongo.Collection) []map[string]interface{} {
+	cursor, err := coll.Find(context.TODO(), bson.D{{}})
+	var results []BookStore
+	if err = cursor.All(context.TODO(), &results); err != nil {
+		panic(err)
+	}
+
+	var ret []map[string]interface{}
+	for _, res := range results {
+		ret = append(ret, map[string]interface{}{
+			"BookAuthor": res.BookAuthor,
+		})
+	}
+
+	return ret
+}
+
+func findAllYears(coll *mongo.Collection) []map[string]interface{} {
+	cursor, err := coll.Find(context.TODO(), bson.D{{}})
+	var results []BookStore
+	if err = cursor.All(context.TODO(), &results); err != nil {
+		panic(err)
+	}
+
+	var ret []map[string]interface{}
+	for _, res := range results {
+		ret = append(ret, map[string]interface{}{
+			"BookYear": res.BookYear,
 		})
 	}
 
@@ -185,8 +220,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// TODO: make sure to pass the proper username, password, and port
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	opts := options.Client().ApplyURI("mongodb+srv://mongodb:ex01@cloudcomputingtum.z7rle34.mongodb.net/?retryWrites=true&w=majority&appName=CloudComputingTUM").SetServerAPIOptions(serverAPI)
+
+	client, err := mongo.Connect(ctx, opts)
+	if err != nil {
+		panic(err)
+	}
+
+	// // TODO: make sure to pass the proper username, password, and port
+	// client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb+srv://mongodb:ex01@cloudcomputingtum.z7rle34.mongodb.net/?retryWrites=true&w=majority&appName=CloudComputingTUM"))
 
 	// This is another way to specify the call of a function. You can define inline
 	// functions (or anonymous functions, similar to the behavior in Python)
@@ -199,6 +242,9 @@ func main() {
 	// You can use such name for the database and collection, or come up with
 	// one by yourself!
 	coll, err := prepareDatabase(client, "exercise-1", "information")
+	if err != nil {
+		log.Fatalf("Error preparing database: %v", err)
+	}
 
 	prepareData(client, coll)
 
@@ -228,11 +274,13 @@ func main() {
 	})
 
 	e.GET("/authors", func(c echo.Context) error {
-		return c.NoContent(http.StatusNoContent)
+		authors := findAllAuthors(coll)
+		return c.Render(200, "authors", authors)
 	})
 
 	e.GET("/years", func(c echo.Context) error {
-		return c.NoContent(http.StatusNoContent)
+		years := findAllYears(coll)
+		return c.Render(200, "years", years)
 	})
 
 	e.GET("/search", func(c echo.Context) error {
@@ -252,6 +300,126 @@ func main() {
 	e.GET("/api/books", func(c echo.Context) error {
 		books := findAllBooks(coll)
 		return c.JSON(http.StatusOK, books)
+	})
+
+	e.GET("/api/authors", func(c echo.Context) error {
+		authors := findAllAuthors(coll)
+		return c.JSON(http.StatusOK, authors)
+	})
+
+	e.GET("/api/years", func(c echo.Context) error {
+		years := findAllYears(coll)
+		return c.JSON(http.StatusOK, years)
+	})
+
+	e.POST("/api/books", func(c echo.Context) error {
+		var book BookStore
+
+		// Bind the request body to the BookStore struct
+		if err := c.Bind(&book); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+		}
+
+		// Validate mandatory fields
+		if book.ID == "" || book.BookName == "" || book.BookAuthor == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Missing mandatory fields: 'id', 'title', or 'author'",
+			})
+		}
+
+		// Check if the book already exists
+		filter := bson.M{
+			"id":         book.ID,         // Matches the 'id' field in MongoDB
+			"bookname":   book.BookName,   // Matches 'bookname'
+			"bookauthor": book.BookAuthor, // Matches 'bookauthor'
+			"bookyear":   book.BookYear,   // Matches 'bookyear'
+			"bookpages":  book.BookPages,  // Matches 'bookpages'
+		}
+
+		log.Printf("POST filter: %+v\n", filter)
+
+		count, err := coll.CountDocuments(context.TODO(), filter)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to check for existing book"})
+		}
+
+		if count > 0 {
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Book already exists"})
+		}
+
+		// Insert the book into the database
+		result, err := coll.InsertOne(context.TODO(), book)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to insert book"})
+		}
+
+		// Return success response with the inserted ID
+		return c.JSON(http.StatusCreated, map[string]interface{}{
+			"message": "Book created successfully",
+			"id":      result.InsertedID,
+		})
+	})
+
+	e.PUT("/api/books/:id", func(c echo.Context) error {
+		id := c.Param("id")
+		var updatesFromRequest map[string]interface{}
+		var updates bson.M = make(bson.M)
+
+		// Bind the request body to a map
+		if err := c.Bind(&updatesFromRequest); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+		}
+
+		// Map the keys to the lowercase versions used in MongoDB
+		if title, ok := updatesFromRequest["title"]; ok {
+			updates["bookname"] = title
+		}
+		if pages, ok := updatesFromRequest["pages"]; ok {
+			updates["bookpages"] = pages
+		}
+		if author, ok := updatesFromRequest["author"]; ok {
+			updates["bookauthor"] = author
+		}
+		if edition, ok := updatesFromRequest["edition"]; ok {
+			updates["bookedition"] = edition
+		}
+		if year, ok := updatesFromRequest["year"]; ok {
+			updates["bookyear"] = year
+		}
+
+		// Remove ID and MongoID from updates (if they were accidentally sent)
+		delete(updates, "id")
+		delete(updates, "_id")
+
+		// Update the book in the database
+		filter := bson.M{"id": id}
+		update := bson.M{"$set": updates}
+		result, err := coll.UpdateOne(context.TODO(), filter, update)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update book"})
+		}
+		if result.MatchedCount == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Book not found"})
+		}
+
+		return c.JSON(http.StatusOK, map[string]string{"message": "Book updated successfully"})
+	})
+
+	// DELETE: Delete a book by ID
+	e.DELETE("/api/books/:id", func(c echo.Context) error {
+		id := c.Param("id")
+
+		// Delete the book from the database
+		filter := bson.M{"id": id}
+		result, err := coll.DeleteOne(context.TODO(), filter)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete book"})
+		}
+		if result.DeletedCount == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Book not found"})
+		}
+
+		return c.JSON(http.StatusOK, map[string]string{"message": "Book deleted successfully"})
 	})
 
 	// We start the server and bind it to port 3030. For future references, this
