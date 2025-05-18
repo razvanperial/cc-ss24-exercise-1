@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -251,12 +250,19 @@ func main() {
 	// Here we prepare the server
 	e := echo.New()
 
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			fmt.Println(c.Request().Method, c.Request().URL.Path)
+			return next(c)
+		}
+	})
+
 	// Define our custom renderer
 	e.Renderer = loadTemplates()
 
 	// Log the requests. Please have a look at echo's documentation on more
 	// middleware
-	e.Use(middleware.Logger())
+	// e.Use(middleware.Logger())
 
 	e.Static("/css", "css")
 
